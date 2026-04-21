@@ -160,6 +160,46 @@ static void printerPrintBarcode(uint8_t m, const String& data) {
   }
 }
 
+// ─── Base64 decoder ──────────────────────────────────────────────────────────
+static int base64CharVal(char c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+') return 62;
+  if (c == '/') return 63;
+  return -1;
+}
+
+static size_t base64Decode(const char* in, size_t inLen, uint8_t* out) {
+  size_t outLen = 0;
+  int buf = 0, nbits = 0;
+  for (size_t i = 0; i < inLen; i++) {
+    int val = base64CharVal(in[i]);
+    if (val < 0) continue;
+    buf = (buf << 6) | val;
+    nbits += 6;
+    if (nbits >= 8) {
+      nbits -= 8;
+      out[outLen++] = (uint8_t)(buf >> nbits);
+    }
+  }
+  return outLen;
+}
+
+// ─── Image printing (GS v 0) ─────────────────────────────────────────────────
+static void printerPrintImage(uint16_t widthDots, uint16_t heightDots, const uint8_t* data, size_t dataLen) {
+  uint16_t widthBytes = (widthDots + 7) / 8;
+  printer.write(0x1D); printer.write(0x76); printer.write(0x30);
+  printer.write(0x00);
+  printer.write(widthBytes & 0xFF);
+  printer.write((widthBytes >> 8) & 0xFF);
+  printer.write(heightDots & 0xFF);
+  printer.write((heightDots >> 8) & 0xFF);
+  printer.write(data, dataLen);
+  printer.flush();
+  printer.write(0x0A);
+}
+
 // ─── HTML page (embedded raw string) ─────────────────────────────────────────
 static const char HTML_PAGE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -254,6 +294,7 @@ static const char HTML_PAGE[] PROGMEM = R"rawliteral(
   .btn-sm:hover { opacity: 0.85; }
   .btn-sm:active { transform: scale(0.97); }
   .btn-status { background: #0f3460; color: #fff; width: 100%%; margin-top: 16px; }
+  .field-file { color: #e0e0e0; font-size: 0.85rem; width: 100%%; }
 </style>
 </head>
 <body>
@@ -339,6 +380,25 @@ static const char HTML_PAGE[] PROGMEM = R"rawliteral(
       <input type="text" class="field-text" id="barcodeData" placeholder="Barcode data...">
       <button class="btn-sm" onclick="printBarcode()">Print</button>
     </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Image Print</div>
+    <div class="input-row">
+      <input type="file" id="imageFile" accept="image/*" class="field-file">
+    </div>
+    <div class="input-row">
+      <select class="field-select" id="paperWidth">
+        <option value="384">58mm (384 dots)</option>
+        <option value="576" selected>80mm (576 dots)</option>
+      </select>
+      <select class="field-select" id="ditherMethod">
+        <option value="floyd" selected>Floyd-Steinberg</option>
+        <option value="threshold">Threshold</option>
+      </select>
+    </div>
+    <canvas id="previewCanvas" style="display:none;border:1px solid #0f3460;border-radius:8px;margin-top:8px;"></canvas>
+    <button class="btn btn-print" id="printImageBtn" onclick="printImage()" style="display:none;">PRINT IMAGE</button>
   </div>
 
   <button class="btn btn-status" onclick="refreshStatus()">REFRESH STATUS</button>
@@ -488,6 +548,133 @@ function refreshStatus() {
     })
     .catch(function(){ setStatus('Error'); showToast('Error fetching status'); });
 }
+
+var _origImg = null;
+var _imageBytes = null;
+var _imageWidth = 0;
+var _imageHeight = 0;
+
+document.getElementById('imageFile').addEventListener('change', function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    var img = new Image();
+    img.onload = function() {
+      _origImg = img;
+      processImage();
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+document.getElementById('paperWidth').addEventListener('change', function() { if (_origImg) processImage(); });
+document.getElementById('ditherMethod').addEventListener('change', function() { if (_origImg) processImage(); });
+
+function processImage() {
+  var paperW = parseInt(document.getElementById('paperWidth').value);
+  var scale = paperW / _origImg.width;
+  var w = paperW;
+  var h = Math.round(_origImg.height * scale);
+  if (h > 800) h = 800;
+
+  var offscreen = document.createElement('canvas');
+  offscreen.width = w;
+  offscreen.height = h;
+  var octx = offscreen.getContext('2d');
+  octx.drawImage(_origImg, 0, 0, w, h);
+  var imgData = octx.getImageData(0, 0, w, h);
+
+  var gray = new Float32Array(w * h);
+  for (var i = 0; i < w * h; i++) {
+    gray[i] = imgData.data[i*4] * 0.299 + imgData.data[i*4+1] * 0.587 + imgData.data[i*4+2] * 0.114;
+  }
+
+  var method = document.getElementById('ditherMethod').value;
+  if (method === 'floyd') {
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var idx = y * w + x;
+        var oldVal = gray[idx];
+        var newVal = oldVal < 128 ? 0 : 255;
+        gray[idx] = newVal;
+        var err = oldVal - newVal;
+        if (x + 1 < w) gray[idx + 1] += err * 7 / 16;
+        if (y + 1 < h) {
+          if (x - 1 >= 0) gray[(y+1)*w + x - 1] += err * 3 / 16;
+          gray[(y+1)*w + x] += err * 5 / 16;
+          if (x + 1 < w) gray[(y+1)*w + x + 1] += err * 1 / 16;
+        }
+      }
+    }
+  } else {
+    for (var i = 0; i < gray.length; i++) {
+      gray[i] = gray[i] < 128 ? 0 : 255;
+    }
+  }
+
+  var widthBytes = Math.ceil(w / 8);
+  var bytes = new Uint8Array(widthBytes * h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      if (gray[y * w + x] < 128) {
+        bytes[y * widthBytes + Math.floor(x / 8)] |= (0x80 >> (x & 7));
+      }
+    }
+  }
+
+  var preview = document.getElementById('previewCanvas');
+  preview.width = w;
+  preview.height = h;
+  preview.style.display = 'block';
+  var maxW = 436;
+  var dScale = Math.min(maxW / w, 1);
+  preview.style.width = Math.round(w * dScale) + 'px';
+  preview.style.height = Math.round(h * dScale) + 'px';
+  var pctx = preview.getContext('2d');
+  var pid = pctx.createImageData(w, h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var val = gray[y * w + x] < 128 ? 0 : 255;
+      var pidx = (y * w + x) * 4;
+      pid.data[pidx] = val;
+      pid.data[pidx+1] = val;
+      pid.data[pidx+2] = val;
+      pid.data[pidx+3] = 255;
+    }
+  }
+  pctx.putImageData(pid, 0, 0);
+
+  _imageBytes = bytes;
+  _imageWidth = w;
+  _imageHeight = h;
+  document.getElementById('printImageBtn').style.display = 'block';
+  showToast(w + 'x' + h + ' image ready');
+}
+
+function printImage() {
+  if (!_imageBytes) { showToast('No image loaded'); return; }
+  var binary = '';
+  var chunk = 8192;
+  for (var i = 0; i < _imageBytes.length; i += chunk) {
+    var slice = _imageBytes.subarray(i, Math.min(i + chunk, _imageBytes.length));
+    binary += String.fromCharCode.apply(null, slice);
+  }
+  var b64 = btoa(binary);
+  setStatus('Printing image...');
+  fetch('/printImage?width=' + _imageWidth + '&height=' + _imageHeight, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: b64
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      setStatus('Ready');
+      showToast(d.ok ? 'Image printed' : 'Print failed: ' + (d.error || ''));
+    })
+    .catch(function(){ setStatus('Error'); showToast('Error communicating with ESP32'); });
+}
 </script>
 </body>
 </html>
@@ -629,6 +816,44 @@ static void handleBarcode() {
   server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid params\"}");
 }
 
+static void handlePrintImage() {
+  if (!server.hasArg("width") || !server.hasArg("height")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing params\"}");
+    return;
+  }
+  int width = server.arg("width").toInt();
+  int height = server.arg("height").toInt();
+  if (width <= 0 || width > 576 || height <= 0 || height > 800) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid dimensions\"}");
+    return;
+  }
+  String b64 = server.arg("plain");
+  if (b64.length() == 0) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"empty body\"}");
+    return;
+  }
+  size_t maxLen = (b64.length() * 3) / 4 + 3;
+  uint8_t* buf = (uint8_t*)malloc(maxLen);
+  if (!buf) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"out of memory\"}");
+    return;
+  }
+  size_t actualLen = base64Decode(b64.c_str(), b64.length(), buf);
+  b64 = String();
+  uint16_t widthBytes = (width + 7) / 8;
+  size_t expectedLen = (size_t)widthBytes * height;
+  Serial.printf("-> IMAGE: %dx%d, %u bytes (expected %u)\n", width, height, actualLen, expectedLen);
+  if (actualLen != expectedLen) {
+    Serial.println("   ERROR: data size mismatch!");
+    free(buf);
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"data size mismatch\"}");
+    return;
+  }
+  printerPrintImage((uint16_t)width, (uint16_t)height, buf, actualLen);
+  free(buf);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 // ─── setup & loop ────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
@@ -664,6 +889,7 @@ void setup() {
   server.on("/defaultLineSpacing",HTTP_POST, handleDefaultLineSpacing);
   server.on("/characterSet",      HTTP_POST, handleCharacterSet);
   server.on("/barcode",           HTTP_POST, handleBarcode);
+  server.on("/printImage",        HTTP_POST, handlePrintImage);
   server.begin();
   Serial.println("Web server started");
 }
