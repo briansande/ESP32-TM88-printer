@@ -153,6 +153,10 @@ void PrinterDriver::setBarcodeNumberPosition(uint8_t n) {
 }
 
 void PrinterDriver::printBarcode(uint8_t m, const String& data) {
+  setBarcodeHeight(162);
+  setBarcodeWidth(3);
+  setBarcodeNumberPosition(0x02);
+
   _serial.write(0x1D);
   _serial.write(0x6B);
   _serial.write(m);
@@ -160,6 +164,8 @@ void PrinterDriver::printBarcode(uint8_t m, const String& data) {
   for (unsigned int i = 0; i < data.length(); i++) {
     _serial.write(data[i]);
   }
+  _serial.flush();
+  _serial.write(0x0A);
 }
 
 void PrinterDriver::printImage(uint16_t widthDots, uint16_t heightDots,
