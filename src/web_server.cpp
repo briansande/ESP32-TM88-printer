@@ -193,6 +193,7 @@ const char PrinterWebServer::HTML_PAGE[] PROGMEM = R"rawliteral(
       </select>
       <select class="field-select" id="ditherMethod">
         <option value="floyd" selected>Floyd-Steinberg</option>
+        <option value="bayer">Bayer 4x4</option>
         <option value="threshold">Threshold</option>
       </select>
     </div>
@@ -438,6 +439,19 @@ function processImage() {
           gray[(y+1)*w + x] += err * 5 / 16;
           if (x + 1 < w) gray[(y+1)*w + x + 1] += err * 1 / 16;
         }
+      }
+    }
+  } else if (method === 'bayer') {
+    var bayer = [
+      [  0, 128,  32, 160],
+      [192,  64, 224,  96],
+      [ 48, 176,  16, 144],
+      [240, 112, 208,  80]
+    ];
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var t = bayer[y & 3][x & 3];
+        gray[y * w + x] = gray[y * w + x] <= t ? 0 : 255;
       }
     }
   } else {
