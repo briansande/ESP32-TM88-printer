@@ -163,6 +163,25 @@ const char PrinterWebServer::HTML_PAGE[] PROGMEM = R"rawliteral(
   </div>
 
   <div class="section">
+    <div class="section-title">Print Speed</div>
+    <div class="input-row">
+      <input type="number" class="field-num" id="printSpeed" min="1" max="9" value="2">
+      <input type="range" id="printSpeedSlider" min="1" max="9" step="1" value="2" style="flex:1;">
+      <button class="btn-sm" onclick="setPrintSpeed()">Set</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Feed Adjustment</div>
+    <div class="input-row">
+      <input type="number" class="field-num" id="feedAdj" min="0" max="255" value="128" style="width:70px;">
+      <input type="range" id="feedAdjSlider" min="0" max="255" step="1" value="128" style="flex:1;">
+      <button class="btn-sm" onclick="setFeedAdjustment()">Set</button>
+    </div>
+    <div style="font-size:0.75rem;color:#666;margin-top:2px;">0x80 (128) = neutral. Higher feeds more, lower feeds less. Tunes out horizontal banding.</div>
+  </div>
+
+  <div class="section">
     <div class="section-title">Barcode</div>
     <div class="input-row">
       <select class="field-select" id="barcodeType">
@@ -322,6 +341,46 @@ function setCharSet() {
   })
     .then(function(r){ return r.json(); })
     .then(function(d){ showToast(d.ok ? 'Character set updated' : 'Failed'); })
+    .catch(function(){ showToast('Error communicating with ESP32'); });
+}
+
+var printSpeedSlider = document.getElementById('printSpeedSlider');
+var printSpeedInput = document.getElementById('printSpeed');
+printSpeedSlider.addEventListener('input', function() { printSpeedInput.value = printSpeedSlider.value; });
+printSpeedInput.addEventListener('input', function() {
+  var v = parseInt(printSpeedInput.value);
+  if (v >= 1 && v <= 9) printSpeedSlider.value = v;
+});
+
+function setPrintSpeed() {
+  var n = document.getElementById('printSpeed').value;
+  fetch('/printSpeed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'n=' + n
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ showToast(d.ok ? 'Print speed set' : 'Failed'); })
+    .catch(function(){ showToast('Error communicating with ESP32'); });
+}
+
+var feedAdjSlider = document.getElementById('feedAdjSlider');
+var feedAdjInput = document.getElementById('feedAdj');
+feedAdjSlider.addEventListener('input', function() { feedAdjInput.value = feedAdjSlider.value; });
+feedAdjInput.addEventListener('input', function() {
+  var v = parseInt(feedAdjInput.value);
+  if (v >= 0 && v <= 255) feedAdjSlider.value = v;
+});
+
+function setFeedAdjustment() {
+  var n = document.getElementById('feedAdj').value;
+  fetch('/feedAdjustment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'n=' + n
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ showToast(d.ok ? 'Feed adjustment set' : 'Failed'); })
     .catch(function(){ showToast('Error communicating with ESP32'); });
 }
 
@@ -543,7 +602,9 @@ void PrinterWebServer::registerRoutes() {
   _server.on("/lineSpacing",       HTTP_POST, [this](){ handleLineSpacing(); });
   _server.on("/defaultLineSpacing",HTTP_POST, [this](){ handleDefaultLineSpacing(); });
   _server.on("/characterSet",      HTTP_POST, [this](){ handleCharacterSet(); });
-  _server.on("/barcode",           HTTP_POST, [this](){ handleBarcode(); });
+  _server.on("/printSpeed",         HTTP_POST, [this](){ handlePrintSpeed(); });
+  _server.on("/feedAdjustment",     HTTP_POST, [this](){ handleFeedAdjustment(); });
+  _server.on("/barcode",            HTTP_POST, [this](){ handleBarcode(); });
   _server.on("/printImage",        HTTP_POST, [this](){ handlePrintImage(); });
 }
 
@@ -659,6 +720,26 @@ void PrinterWebServer::handleCharacterSet() {
     int n = _server.arg("n").toInt();
     if (n >= 0 && n <= 10) {
       _printer.setCharacterSet((uint8_t)n);
+    }
+  }
+  _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void PrinterWebServer::handlePrintSpeed() {
+  if (_server.hasArg("n")) {
+    int n = _server.arg("n").toInt();
+    if (n >= 1 && n <= 9) {
+      _printer.setPrintSpeed((uint8_t)n);
+    }
+  }
+  _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void PrinterWebServer::handleFeedAdjustment() {
+  if (_server.hasArg("n")) {
+    int n = _server.arg("n").toInt();
+    if (n >= 0 && n <= 255) {
+      _printer.setFeedAdjustment((uint8_t)n);
     }
   }
   _server.send(200, "application/json", "{\"ok\":true}");

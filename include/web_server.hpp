@@ -28,6 +28,8 @@ private:
   void handleLineSpacing();
   void handleDefaultLineSpacing();
   void handleCharacterSet();
+  void handlePrintSpeed();
+  void handleFeedAdjustment();
   void handleBarcode();
   void handlePrintImage();
 };

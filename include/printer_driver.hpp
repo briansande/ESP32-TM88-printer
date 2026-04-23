@@ -29,6 +29,12 @@ public:
   void setCharacterSet(uint8_t n);
   void setPrintSpeed(uint8_t level);
 
+// Fine-tune per-line paper advance to eliminate horizontal banding (TM-T88III).
+// Sends ESC 3 n — sets line spacing to n dots (1/203 inch per dot).
+// Default spacing (~34 dots) is restored by calling defaultLineSpacing().
+// Tweak ±1–2 dots from baseline until banding disappears.
+void setFeedAdjustment(uint8_t amount);
+
   void setBarcodeHeight(uint8_t n);
   void setBarcodeWidth(uint8_t n);
   void setBarcodeNumberPosition(uint8_t n);

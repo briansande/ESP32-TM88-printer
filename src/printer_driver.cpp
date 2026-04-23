@@ -16,6 +16,7 @@ void PrinterDriver::begin() {
   delay(500);
   reset();
   setPrintSpeed(2);
+  setFeedAdjustment(0x80);
   Serial.println("Printer initialized");
 }
 
@@ -151,6 +152,17 @@ void PrinterDriver::setPrintSpeed(uint8_t level) {
   if (level < 1) level = 1;
   if (level > 9) level = 9;
   uint8_t cmd[] = { 0x1D, 0x28, 0x4B, 0x02, 0x00, 0x32, level };
+  _serial.write(cmd, sizeof(cmd));
+}
+
+// Fine-tune mechanical paper-feed amount (GS ( K <len> 0 50 amount).
+// Valid range: 0x00 – 0xFF.  Neutral / factory default is 0x80.
+// ESC 3 n — sets line spacing to n dots (1/203 inch per dot on TM-T88III).
+// Default is ESC 2 which sets 1/6 inch (~34 dots at 203dpi).
+// Typical body text: 24–30 dots. Tweak ±1 to fix banding.
+// Call defaultLineSpacing() (ESC 2) to restore the default.
+void PrinterDriver::setFeedAdjustment(uint8_t amount) {
+  uint8_t cmd[] = { 0x1B, 0x33, amount };
   _serial.write(cmd, sizeof(cmd));
 }
 
