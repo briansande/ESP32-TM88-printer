@@ -166,15 +166,13 @@ const char PrinterWebServer::HTML_PAGE[] PROGMEM = R"rawliteral(
     <div class="section-title">Barcode</div>
     <div class="input-row">
       <select class="field-select" id="barcodeType">
-        <option value="65">UPC-A</option>
-        <option value="66">UPC-E</option>
-        <option value="67">EAN-13</option>
-        <option value="68">EAN-8</option>
-        <option value="69" selected>CODE39</option>
-        <option value="70">ITF</option>
-        <option value="71">CODABAR</option>
-        <option value="72">CODE93</option>
-        <option value="73">CODE128</option>
+        <option value="0">UPC-A</option>
+        <option value="1">UPC-E</option>
+        <option value="2">EAN-13</option>
+        <option value="3">EAN-8</option>
+        <option value="4" selected>CODE39</option>
+        <option value="5">ITF</option>
+        <option value="6">CODABAR</option>
       </select>
     </div>
     <div class="input-row">
@@ -623,7 +621,7 @@ void PrinterWebServer::handleBarcode() {
   if (_server.hasArg("m") && _server.hasArg("data")) {
     int m = _server.arg("m").toInt();
     String data = _server.arg("data");
-    if (m >= 65 && m <= 73 && data.length() > 0) {
+    if (m >= 0 && m <= 6 && data.length() > 0) {
       _printer.printBarcode((uint8_t)m, data);
       _server.send(200, "application/json", "{\"ok\":true}");
       return;

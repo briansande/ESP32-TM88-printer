@@ -157,13 +157,18 @@ void PrinterDriver::printBarcode(uint8_t m, const String& data) {
   setBarcodeWidth(3);
   setBarcodeNumberPosition(0x02);
 
+  String barcodeData = data;
+  if (m == 4 && !barcodeData.startsWith("*")) {
+    barcodeData = "*" + barcodeData + "*";
+  }
+
   _serial.write(0x1D);
   _serial.write(0x6B);
   _serial.write(m);
-  _serial.write((uint8_t)data.length());
-  for (unsigned int i = 0; i < data.length(); i++) {
-    _serial.write(data[i]);
+  for (unsigned int i = 0; i < barcodeData.length(); i++) {
+    _serial.write(barcodeData[i]);
   }
+  _serial.write(0x00);
   _serial.flush();
   _serial.write(0x0A);
 }
@@ -177,7 +182,13 @@ void PrinterDriver::printImage(uint16_t widthDots, uint16_t heightDots,
   _serial.write((widthBytes >> 8) & 0xFF);
   _serial.write(heightDots & 0xFF);
   _serial.write((heightDots >> 8) & 0xFF);
-  _serial.write(data, dataLen);
-  _serial.flush();
+  size_t sent = 0;
+  while (sent < dataLen) {
+    size_t chunk = (dataLen - sent > 240) ? 240 : (dataLen - sent);
+    _serial.write(data + sent, chunk);
+    sent += chunk;
+    _serial.flush();
+    delay(10);
+  }
   _serial.write(0x0A);
 }
