@@ -4,10 +4,11 @@
 
 class PrinterDriver {
 public:
-  PrinterDriver(int rx, int tx, int baud);
+  PrinterDriver(int rx, int tx, int baud, int txBufferSize = 4096);
   void begin();
   void reset();
   void print(const String& text);
+  void printLine(const String& text);
   void cut();
   void feed(uint8_t n = 5);
   int getStatus();
@@ -15,7 +16,9 @@ public:
   void setBold(bool on);
   void setUnderline(bool on);
   void setDoubleHeight(bool on);
+  void setDoubleWidth(bool on);
   void setReverse(bool on);
+  void resetStyle();
 
   void justifyLeft();
   void justifyCenter();
@@ -35,7 +38,8 @@ public:
 
 private:
   HardwareSerial _serial;
-  int _rx, _tx, _baud;
+  int _rx, _tx, _baud, _txBufferSize;
   uint8_t _style;
   void applyStyle();
+  void writeBytes(const uint8_t* buf, size_t len);
 };

@@ -1,9 +1,17 @@
 #include "printer_driver.hpp"
 
-PrinterDriver::PrinterDriver(int rx, int tx, int baud)
-  : _serial(2), _rx(rx), _tx(tx), _baud(baud), _style(0x00) {}
+// ---------------------------------------------------------------------------
+// Construction & init
+// ---------------------------------------------------------------------------
+
+PrinterDriver::PrinterDriver(int rx, int tx, int baud, int txBufferSize)
+  : _serial(2), _rx(rx), _tx(tx), _baud(baud),
+    _txBufferSize(txBufferSize), _style(0x00) {}
 
 void PrinterDriver::begin() {
+  // Increase TX buffer BEFORE begin() so the OS allocates it correctly.
+  // A large buffer lets printImage() queue the entire payload without stalling.
+  _serial.setTxBufferSize(_txBufferSize);
   _serial.begin(_baud, SERIAL_8N1, _rx, _tx);
   delay(500);
   reset();
@@ -14,7 +22,12 @@ void PrinterDriver::reset() {
   _serial.write(0x1B);
   _serial.write(0x40);
   delay(100);
+  _style = 0x00;  // keep software state in sync after reset
 }
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 void PrinterDriver::applyStyle() {
   _serial.write(0x1B);
@@ -22,9 +35,18 @@ void PrinterDriver::applyStyle() {
   _serial.write(_style);
 }
 
+// Single write call keeps data transfer as atomic as possible.
+void PrinterDriver::writeBytes(const uint8_t* buf, size_t len) {
+  _serial.write(buf, len);
+}
+
+// ---------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------
+
 void PrinterDriver::print(const String& text) {
   int start = 0;
-  while (start < text.length()) {
+  while (start < (int)text.length()) {
     int newline = text.indexOf('\n', start);
     if (newline == -1) {
       _serial.print(text.substring(start));
@@ -36,60 +58,39 @@ void PrinterDriver::print(const String& text) {
       start = newline + 1;
     }
   }
-
+  // Three blank lines after block (original behaviour)
   _serial.write(0x0A);
   _serial.write(0x0A);
   _serial.write(0x0A);
 }
 
-void PrinterDriver::cut() {
-  _serial.write(0x1B);
-  _serial.write(0x64);
-  _serial.write(0x03);
-
-  _serial.write(0x1D);
-  _serial.write(0x56);
-  _serial.write(0x41);
-  _serial.write(0x00);
+void PrinterDriver::printLine(const String& text) {
+  _serial.print(text);
+  _serial.write(0x0A);
 }
 
-void PrinterDriver::feed(uint8_t n) {
-  _serial.write(0x1B);
-  _serial.write(0x64);
-  _serial.write(n);
-}
-
-int PrinterDriver::getStatus() {
-  _serial.flush();
-  while (_serial.available()) _serial.read();
-  _serial.write(0x10);
-  _serial.write(0x04);
-  _serial.write(0x01);
-  unsigned long start = millis();
-  while (millis() - start < 500) {
-    if (_serial.available()) {
-      return _serial.read();
-    }
-    delay(1);
-  }
-  return -1;
-}
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
 
 void PrinterDriver::setBold(bool on) {
-  if (on) _style |= 0x08;
-  else    _style &= ~0x08;
+  if (on) _style |= 0x08; else _style &= ~0x08;
   applyStyle();
 }
 
 void PrinterDriver::setUnderline(bool on) {
-  if (on) _style |= 0x80;
-  else    _style &= ~0x80;
+  // Bit 7 of ESC ! enables underline on TM-88 III
+  if (on) _style |= 0x80; else _style &= ~0x80;
   applyStyle();
 }
 
 void PrinterDriver::setDoubleHeight(bool on) {
-  if (on) _style |= 0x10;
-  else    _style &= ~0x10;
+  if (on) _style |= 0x10; else _style &= ~0x10;
+  applyStyle();
+}
+
+void PrinterDriver::setDoubleWidth(bool on) {
+  if (on) _style |= 0x20; else _style &= ~0x20;
   applyStyle();
 }
 
@@ -99,57 +100,79 @@ void PrinterDriver::setReverse(bool on) {
   _serial.write(on ? 0x01 : 0x00);
 }
 
+void PrinterDriver::resetStyle() {
+  _style = 0x00;
+  applyStyle();
+  setReverse(false);
+}
+
+// ---------------------------------------------------------------------------
+// Alignment
+// ---------------------------------------------------------------------------
+
 void PrinterDriver::justifyLeft() {
-  _serial.write(0x1B);
-  _serial.write(0x61);
-  _serial.write(0x00);
+  _serial.write(0x1B); _serial.write(0x61); _serial.write(0x00);
 }
 
 void PrinterDriver::justifyCenter() {
-  _serial.write(0x1B);
-  _serial.write(0x61);
-  _serial.write(0x01);
+  _serial.write(0x1B); _serial.write(0x61); _serial.write(0x01);
 }
 
 void PrinterDriver::justifyRight() {
-  _serial.write(0x1B);
-  _serial.write(0x61);
-  _serial.write(0x02);
+  _serial.write(0x1B); _serial.write(0x61); _serial.write(0x02);
 }
 
+// ---------------------------------------------------------------------------
+// Spacing & feed
+// ---------------------------------------------------------------------------
+
 void PrinterDriver::setLineSpacing(uint8_t n) {
-  _serial.write(0x1B);
-  _serial.write(0x33);
-  _serial.write(n);
+  _serial.write(0x1B); _serial.write(0x33); _serial.write(n);
 }
 
 void PrinterDriver::defaultLineSpacing() {
-  _serial.write(0x1B);
-  _serial.write(0x32);
+  _serial.write(0x1B); _serial.write(0x32);
 }
+
+void PrinterDriver::feed(uint8_t n) {
+  _serial.write(0x1B); _serial.write(0x64); _serial.write(n);
+}
+
+// ---------------------------------------------------------------------------
+// Character set
+// ---------------------------------------------------------------------------
 
 void PrinterDriver::setCharacterSet(uint8_t n) {
-  _serial.write(0x1B);
-  _serial.write(0x52);
-  _serial.write(n);
+  _serial.write(0x1B); _serial.write(0x52); _serial.write(n);
 }
 
-void PrinterDriver::setBarcodeHeight(uint8_t n) {
+// ---------------------------------------------------------------------------
+// Cut
+// ---------------------------------------------------------------------------
+
+void PrinterDriver::cut() {
+  // Feed 3 lines then partial cut
+  feed(3);
   _serial.write(0x1D);
-  _serial.write(0x68);
-  _serial.write(n);
+  _serial.write(0x56);
+  _serial.write(0x41);
+  _serial.write(0x00);
+}
+
+// ---------------------------------------------------------------------------
+// Barcode
+// ---------------------------------------------------------------------------
+
+void PrinterDriver::setBarcodeHeight(uint8_t n) {
+  _serial.write(0x1D); _serial.write(0x68); _serial.write(n);
 }
 
 void PrinterDriver::setBarcodeWidth(uint8_t n) {
-  _serial.write(0x1D);
-  _serial.write(0x77);
-  _serial.write(n);
+  _serial.write(0x1D); _serial.write(0x77); _serial.write(n);
 }
 
 void PrinterDriver::setBarcodeNumberPosition(uint8_t n) {
-  _serial.write(0x1D);
-  _serial.write(0x48);
-  _serial.write(n);
+  _serial.write(0x1D); _serial.write(0x48); _serial.write(n);
 }
 
 void PrinterDriver::printBarcode(uint8_t m, const String& data) {
@@ -173,22 +196,69 @@ void PrinterDriver::printBarcode(uint8_t m, const String& data) {
   _serial.write(0x0A);
 }
 
+// ---------------------------------------------------------------------------
+// Image  ← THE KEY FIX
+//
+// Root cause of banding: the original code split data into 240-byte chunks,
+// calling flush() + delay(10) between each one. The printer finished printing
+// the current chunk, the paper stopped moving during the pause, then resumed —
+// leaving a visible gap at each chunk boundary.
+//
+// Fix: send the header + ALL pixel data in a single continuous stream, then
+// flush once at the end. This matches how barcode data is sent and gives the
+// printer an uninterrupted feed to work from.
+//
+// The large TX buffer (default 4096 bytes) set in begin() means the ESP32's
+// UART peripheral keeps the wire busy even for large images, so the printer
+// never stalls waiting for data.
+// ---------------------------------------------------------------------------
+
 void PrinterDriver::printImage(uint16_t widthDots, uint16_t heightDots,
                                 const uint8_t* data, size_t dataLen) {
   uint16_t widthBytes = (widthDots + 7) / 8;
-  _serial.write(0x1D); _serial.write(0x76); _serial.write(0x30);
-  _serial.write(0x00);
-  _serial.write(widthBytes & 0xFF);
-  _serial.write((widthBytes >> 8) & 0xFF);
-  _serial.write(heightDots & 0xFF);
-  _serial.write((heightDots >> 8) & 0xFF);
-  size_t sent = 0;
-  while (sent < dataLen) {
-    size_t chunk = (dataLen - sent > 240) ? 240 : (dataLen - sent);
-    _serial.write(data + sent, chunk);
-    sent += chunk;
-    _serial.flush();
-    delay(10);
+
+  // Sanity check: dataLen should equal widthBytes * heightDots
+  size_t expectedLen = (size_t)widthBytes * heightDots;
+  if (dataLen != expectedLen) {
+    Serial.printf("PrinterDriver::printImage: dataLen %u != expected %u — aborting\n",
+                  (unsigned)dataLen, (unsigned)expectedLen);
+    return;
   }
+
+  // GS v 0 header (raster bit image)
+  uint8_t header[8] = {
+    0x1D, 0x76, 0x30, 0x00,
+    (uint8_t)(widthBytes & 0xFF),  (uint8_t)((widthBytes >> 8) & 0xFF),
+    (uint8_t)(heightDots & 0xFF),  (uint8_t)((heightDots >> 8) & 0xFF)
+  };
+  writeBytes(header, sizeof(header));
+
+  // All pixel data in one shot — no chunking, no delays, no mid-stream flush
+  writeBytes(data, dataLen);
+
+  // Single flush after everything is queued
+  _serial.flush();
+
   _serial.write(0x0A);
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+int PrinterDriver::getStatus() {
+  _serial.flush();
+  while (_serial.available()) _serial.read();  // drain any stale RX bytes
+
+  // DLE EOT 1 — transmit paper/cover status
+  _serial.write(0x10);
+  _serial.write(0x04);
+  _serial.write(0x01);
+
+  unsigned long start = millis();
+  while (millis() - start < 500) {
+    if (_serial.available()) return _serial.read();
+    delay(1);
+  }
+  return -1;  // timeout
 }
