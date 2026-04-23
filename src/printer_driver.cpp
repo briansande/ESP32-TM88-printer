@@ -15,6 +15,7 @@ void PrinterDriver::begin() {
   _serial.begin(_baud, SERIAL_8N1, _rx, _tx);
   delay(500);
   reset();
+  setPrintSpeed(2);
   Serial.println("Printer initialized");
 }
 
@@ -144,6 +145,13 @@ void PrinterDriver::feed(uint8_t n) {
 
 void PrinterDriver::setCharacterSet(uint8_t n) {
   _serial.write(0x1B); _serial.write(0x52); _serial.write(n);
+}
+
+void PrinterDriver::setPrintSpeed(uint8_t level) {
+  if (level < 1) level = 1;
+  if (level > 9) level = 9;
+  uint8_t cmd[] = { 0x1D, 0x28, 0x4B, 0x02, 0x00, 0x32, level };
+  _serial.write(cmd, sizeof(cmd));
 }
 
 // ---------------------------------------------------------------------------

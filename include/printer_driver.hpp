@@ -27,6 +27,7 @@ public:
   void setLineSpacing(uint8_t n);
   void defaultLineSpacing();
   void setCharacterSet(uint8_t n);
+  void setPrintSpeed(uint8_t level);
 
   void setBarcodeHeight(uint8_t n);
   void setBarcodeWidth(uint8_t n);
