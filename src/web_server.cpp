@@ -196,6 +196,11 @@ const char PrinterWebServer::HTML_PAGE[] PROGMEM = R"rawliteral(
         <option value="threshold">Threshold</option>
       </select>
     </div>
+    <div class="input-row">
+      <label style="font-size:0.85rem;color:#aaa;white-space:nowrap;">Gamma</label>
+      <input type="number" class="field-num" id="gammaValue" min="0.1" max="5.0" step="0.1" value="1.8" style="width:70px;">
+      <input type="range" id="gammaSlider" min="0.1" max="5.0" step="0.1" value="1.8" style="flex:1;">
+    </div>
     <canvas id="previewCanvas" style="display:none;border:1px solid #0f3460;border-radius:8px;margin-top:8px;"></canvas>
     <button class="btn btn-print" id="printImageBtn" onclick="printImage()" style="display:none;">PRINT IMAGE</button>
   </div>
@@ -371,6 +376,20 @@ document.getElementById('imageFile').addEventListener('change', function(e) {
 document.getElementById('paperWidth').addEventListener('change', function() { if (_origImg) processImage(); });
 document.getElementById('ditherMethod').addEventListener('change', function() { if (_origImg) processImage(); });
 
+var gammaSlider = document.getElementById('gammaSlider');
+var gammaInput = document.getElementById('gammaValue');
+gammaSlider.addEventListener('input', function() {
+  gammaInput.value = gammaSlider.value;
+  if (_origImg) processImage();
+});
+gammaInput.addEventListener('input', function() {
+  var v = parseFloat(gammaInput.value);
+  if (v >= 0.1 && v <= 5.0) {
+    gammaSlider.value = v;
+    if (_origImg) processImage();
+  }
+});
+
 function processImage() {
   var paperW = parseInt(document.getElementById('paperWidth').value);
   var scale = paperW / _origImg.width;
@@ -388,6 +407,20 @@ function processImage() {
   var gray = new Float32Array(w * h);
   for (var i = 0; i < w * h; i++) {
     gray[i] = imgData.data[i*4] * 0.299 + imgData.data[i*4+1] * 0.587 + imgData.data[i*4+2] * 0.114;
+  }
+
+  var gamma = parseFloat(document.getElementById('gammaValue').value);
+  if (gamma > 0 && Math.abs(gamma - 1.0) > 0.001) {
+    var invG = 1.0 / gamma;
+    var lut = new Uint8Array(256);
+    for (var i = 0; i < 256; i++) {
+      lut[i] = Math.round(Math.pow(i / 255.0, invG) * 255.0);
+    }
+    for (var i = 0; i < gray.length; i++) {
+      var v = gray[i];
+      var idx = v < 0 ? 0 : (v > 255 ? 255 : Math.round(v));
+      gray[i] = lut[idx];
+    }
   }
 
   var method = document.getElementById('ditherMethod').value;
