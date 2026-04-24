@@ -7,3 +7,6 @@ void gammaCorrect(uint8_t* pixels, size_t len, float gamma = 1.8f);
 
 void ditherBayer4x4(const uint8_t* grey, uint16_t width, uint16_t height,
                     uint8_t* out);
+
+void ditherBayer8x8(const uint8_t* grey, uint16_t width, uint16_t height,
+                    uint8_t* out);
