@@ -2,6 +2,156 @@
 #include "base64.hpp"
 #include <WiFi.h>
 
+namespace {
+
+const uint16_t MAX_INLINE_WIDTH_DOTS = 576;
+const uint16_t MAX_INLINE_HEIGHT_DOTS = 24;
+const uint8_t MAX_SEGMENT_FEED = 10;
+
+bool isBase64Payload(const String& value) {
+  for (unsigned int i = 0; i < value.length(); i++) {
+    char c = value[i];
+    bool ok = (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') ||
+              c == '+' || c == '/' || c == '=';
+    if (!ok) return false;
+  }
+  return true;
+}
+
+size_t decodedCapacity(const String& b64) {
+  return (b64.length() * 3) / 4 + 3;
+}
+
+bool parsePositiveInt(const String& text, int& value) {
+  if (text.length() == 0) return false;
+  long result = 0;
+  for (unsigned int i = 0; i < text.length(); i++) {
+    char c = text[i];
+    if (c < '0' || c > '9') return false;
+    result = result * 10 + (c - '0');
+    if (result > 32767) return false;
+  }
+  value = (int)result;
+  return true;
+}
+
+void stripTrailingCarriageReturn(String& line) {
+  if (line.endsWith("\r")) {
+    line.remove(line.length() - 1);
+  }
+}
+
+bool nextProtocolLine(const String& body, int& pos, String& line) {
+  if (pos >= (int)body.length()) return false;
+  int newline = body.indexOf('\n', pos);
+  if (newline < 0) {
+    line = body.substring(pos);
+    pos = body.length();
+  } else {
+    line = body.substring(pos, newline);
+    pos = newline + 1;
+  }
+  stripTrailingCarriageReturn(line);
+  return true;
+}
+
+String jsonError(const char* error) {
+  return String("{\"ok\":false,\"error\":\"") + error + "\"}";
+}
+
+bool validateImageSegment(int width, int height, const String& b64, const char*& error) {
+  if (width <= 0 || width > MAX_INLINE_WIDTH_DOTS ||
+      height <= 0 || height > MAX_INLINE_HEIGHT_DOTS) {
+    error = "invalid inline image dimensions";
+    return false;
+  }
+  if (b64.length() == 0 || !isBase64Payload(b64)) {
+    error = "invalid image base64";
+    return false;
+  }
+
+  size_t maxLen = decodedCapacity(b64);
+  uint8_t* buf = (uint8_t*)malloc(maxLen);
+  if (!buf) {
+    error = "out of memory";
+    return false;
+  }
+  size_t actualLen = base64::decode(b64.c_str(), b64.length(), buf);
+  free(buf);
+
+  uint16_t widthBytes = ((uint16_t)width + 7) / 8;
+  size_t expectedLen = (size_t)widthBytes * (uint16_t)height;
+  if (actualLen != expectedLen) {
+    error = "data size mismatch";
+    return false;
+  }
+  return true;
+}
+
+bool parseImageLine(const String& line, int& width, int& height, String& b64, const char*& error) {
+  int firstSpace = line.indexOf(' ');
+  int secondSpace = line.indexOf(' ', firstSpace + 1);
+  int thirdSpace = line.indexOf(' ', secondSpace + 1);
+  if (firstSpace < 0 || secondSpace < 0 || thirdSpace < 0) {
+    error = "invalid IMAGE syntax";
+    return false;
+  }
+
+  String widthText = line.substring(firstSpace + 1, secondSpace);
+  String heightText = line.substring(secondSpace + 1, thirdSpace);
+  b64 = line.substring(thirdSpace + 1);
+
+  if (!parsePositiveInt(widthText, width) || !parsePositiveInt(heightText, height)) {
+    error = "invalid IMAGE dimensions";
+    return false;
+  }
+
+  return validateImageSegment(width, height, b64, error);
+}
+
+bool validatePrintSegmentsBody(const String& body, const char*& error) {
+  int pos = 0;
+  String line;
+  bool sawCommand = false;
+
+  while (nextProtocolLine(body, pos, line)) {
+    if (line.length() == 0 && pos >= (int)body.length()) break;
+    sawCommand = true;
+
+    if (line == "LF") {
+      continue;
+    }
+    if (line == "TEXT" || line.startsWith("TEXT ")) {
+      String b64 = line.length() > 5 ? line.substring(5) : "";
+      if (!isBase64Payload(b64)) {
+        error = "invalid text base64";
+        return false;
+      }
+      continue;
+    }
+    if (line.startsWith("IMAGE ")) {
+      int width = 0;
+      int height = 0;
+      String b64;
+      if (!parseImageLine(line, width, height, b64, error)) return false;
+      continue;
+    }
+
+    error = "unknown segment command";
+    return false;
+  }
+
+  if (!sawCommand) {
+    error = "empty body";
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 const char PrinterWebServer::HTML_PAGE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -624,6 +774,7 @@ void PrinterWebServer::registerRoutes() {
   _server.on("/feedAdjustment",     HTTP_POST, [this](){ handleFeedAdjustment(); });
   _server.on("/barcode",            HTTP_POST, [this](){ handleBarcode(); });
   _server.on("/printImage",        HTTP_POST, [this](){ handlePrintImage(); });
+  _server.on("/printSegments",     HTTP_POST, [this](){ handlePrintSegments(); });
 }
 
 void PrinterWebServer::begin() {
@@ -811,5 +962,81 @@ void PrinterWebServer::handlePrintImage() {
   }
   _printer.printImage((uint16_t)width, (uint16_t)height, buf, actualLen);
   free(buf);
+  _server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void PrinterWebServer::handlePrintSegments() {
+  int trailingFeed = 0;
+  if (_server.hasArg("feed")) {
+    if (!parsePositiveInt(_server.arg("feed"), trailingFeed) ||
+        trailingFeed < 0 || trailingFeed > MAX_SEGMENT_FEED) {
+      _server.send(400, "application/json", jsonError("invalid feed"));
+      return;
+    }
+  }
+
+  String body = _server.arg("plain");
+  const char* error = nullptr;
+  if (!validatePrintSegmentsBody(body, error)) {
+    _server.send(error && String(error) == "out of memory" ? 500 : 400,
+                 "application/json", jsonError(error ? error : "invalid body"));
+    return;
+  }
+
+  Serial.printf("-> PRINT SEGMENTS: %u bytes, feed=%d\n", body.length(), trailingFeed);
+
+  int pos = 0;
+  String line;
+  while (nextProtocolLine(body, pos, line)) {
+    if (line.length() == 0 && pos >= (int)body.length()) break;
+
+    if (line == "LF") {
+      _printer.newline();
+      continue;
+    }
+
+    if (line == "TEXT" || line.startsWith("TEXT ")) {
+      String b64 = line.length() > 5 ? line.substring(5) : "";
+      size_t maxLen = decodedCapacity(b64);
+      uint8_t* buf = (uint8_t*)malloc(maxLen);
+      if (!buf) {
+        _server.send(500, "application/json", jsonError("out of memory"));
+        return;
+      }
+      size_t actualLen = base64::decode(b64.c_str(), b64.length(), buf);
+      _printer.printTextRaw(buf, actualLen);
+      free(buf);
+      continue;
+    }
+
+    if (line.startsWith("IMAGE ")) {
+      int width = 0;
+      int height = 0;
+      String b64;
+      if (!parseImageLine(line, width, height, b64, error)) {
+        _server.send(400, "application/json", jsonError(error ? error : "invalid image"));
+        return;
+      }
+
+      size_t maxLen = decodedCapacity(b64);
+      uint8_t* buf = (uint8_t*)malloc(maxLen);
+      if (!buf) {
+        _server.send(500, "application/json", jsonError("out of memory"));
+        return;
+      }
+      size_t actualLen = base64::decode(b64.c_str(), b64.length(), buf);
+      bool ok = _printer.printRasterInline((uint16_t)width, (uint16_t)height, buf, actualLen);
+      free(buf);
+      if (!ok) {
+        _server.send(400, "application/json", jsonError("inline image rejected"));
+        return;
+      }
+    }
+  }
+
+  if (trailingFeed > 0) {
+    _printer.feed((uint8_t)trailingFeed);
+  }
+
   _server.send(200, "application/json", "{\"ok\":true}");
 }

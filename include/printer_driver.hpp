@@ -9,6 +9,9 @@ public:
   void reset();
   void print(const String& text);
   void printLine(const String& text);
+  void printTextRaw(const String& text);
+  void printTextRaw(const uint8_t* data, size_t dataLen);
+  void newline();
   void cut();
   void feed(uint8_t n = 5);
   int getStatus();
@@ -42,6 +45,8 @@ void setFeedAdjustment(uint8_t amount);
 
   void printImage(uint16_t widthDots, uint16_t heightDots,
                   const uint8_t* data, size_t dataLen);
+  bool printRasterInline(uint16_t widthDots, uint16_t heightDots,
+                         const uint8_t* data, size_t dataLen);
 
 private:
   HardwareSerial _serial;

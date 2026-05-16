@@ -71,6 +71,19 @@ void PrinterDriver::printLine(const String& text) {
   _serial.write(0x0A);
 }
 
+void PrinterDriver::printTextRaw(const String& text) {
+  printTextRaw((const uint8_t*)text.c_str(), text.length());
+}
+
+void PrinterDriver::printTextRaw(const uint8_t* data, size_t dataLen) {
+  if (!data || dataLen == 0) return;
+  writeBytes(data, dataLen);
+}
+
+void PrinterDriver::newline() {
+  _serial.write(0x0A);
+}
+
 // ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
@@ -260,6 +273,46 @@ void PrinterDriver::printImage(uint16_t widthDots, uint16_t heightDots,
   _serial.flush();
 
   _serial.write(0x0A);
+}
+
+bool PrinterDriver::printRasterInline(uint16_t widthDots, uint16_t heightDots,
+                                      const uint8_t* data, size_t dataLen) {
+  if (!data || widthDots == 0 || heightDots == 0 || heightDots > 24) {
+    Serial.println("PrinterDriver::printRasterInline: invalid dimensions");
+    return false;
+  }
+
+  uint16_t widthBytes = (widthDots + 7) / 8;
+  size_t expectedLen = (size_t)widthBytes * heightDots;
+  if (dataLen != expectedLen) {
+    Serial.printf("PrinterDriver::printRasterInline: dataLen %u != expected %u\n",
+                  (unsigned)dataLen, (unsigned)expectedLen);
+    return false;
+  }
+
+  // ESC * m nL nH data prints a bit image into the current text line buffer.
+  // Mode 33 is 24-dot double-density, so a 16x16 emoji can share a line with
+  // native text. Unused lower rows are left white.
+  uint8_t header[5] = {
+    0x1B, 0x2A, 0x21,
+    (uint8_t)(widthDots & 0xFF),
+    (uint8_t)((widthDots >> 8) & 0xFF)
+  };
+  writeBytes(header, sizeof(header));
+
+  for (uint16_t x = 0; x < widthDots; x++) {
+    uint8_t column[3] = {0, 0, 0};
+    for (uint16_t y = 0; y < heightDots; y++) {
+      size_t srcIndex = (size_t)y * widthBytes + (x / 8);
+      uint8_t srcMask = 0x80 >> (x & 7);
+      if (data[srcIndex] & srcMask) {
+        column[y / 8] |= (0x80 >> (y & 7));
+      }
+    }
+    writeBytes(column, sizeof(column));
+  }
+
+  return true;
 }
 
 // ---------------------------------------------------------------------------

@@ -32,4 +32,5 @@ private:
   void handleFeedAdjustment();
   void handleBarcode();
   void handlePrintImage();
+  void handlePrintSegments();
 };
