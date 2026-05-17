@@ -4,8 +4,8 @@
 
 namespace {
 
-const uint16_t MAX_INLINE_WIDTH_DOTS = 576;
-const uint16_t MAX_INLINE_HEIGHT_DOTS = 24;
+const uint16_t MAX_SEGMENT_WIDTH_DOTS = 576;
+const uint16_t MAX_SEGMENT_HEIGHT_DOTS = 48;
 const uint8_t MAX_SEGMENT_FEED = 10;
 
 bool isBase64Payload(const String& value) {
@@ -62,9 +62,9 @@ String jsonError(const char* error) {
 }
 
 bool validateImageSegment(int width, int height, const String& b64, const char*& error) {
-  if (width <= 0 || width > MAX_INLINE_WIDTH_DOTS ||
-      height <= 0 || height > MAX_INLINE_HEIGHT_DOTS) {
-    error = "invalid inline image dimensions";
+  if (width <= 0 || width > MAX_SEGMENT_WIDTH_DOTS ||
+      height <= 0 || height > MAX_SEGMENT_HEIGHT_DOTS) {
+    error = "invalid image segment dimensions";
     return false;
   }
   if (b64.length() == 0 || !isBase64Payload(b64)) {
@@ -1025,10 +1025,12 @@ void PrinterWebServer::handlePrintSegments() {
         return;
       }
       size_t actualLen = base64::decode(b64.c_str(), b64.length(), buf);
-      bool ok = _printer.printRasterInline((uint16_t)width, (uint16_t)height, buf, actualLen);
+      bool ok = height <= 24
+          ? _printer.printRasterInline((uint16_t)width, (uint16_t)height, buf, actualLen)
+          : _printer.printRasterMultiline((uint16_t)width, (uint16_t)height, buf, actualLen);
       free(buf);
       if (!ok) {
-        _server.send(400, "application/json", jsonError("inline image rejected"));
+        _server.send(400, "application/json", jsonError("image segment rejected"));
         return;
       }
     }

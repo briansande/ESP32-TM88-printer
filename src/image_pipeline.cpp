@@ -70,3 +70,32 @@ void ditherBayer8x8(const uint8_t* grey, uint16_t width, uint16_t height,
         }
     }
 }
+
+bool packEscpos24DotBand(const uint8_t* raster, uint16_t widthDots,
+                         uint16_t heightDots, uint16_t yOffset,
+                         uint8_t* out, size_t outLen) {
+    if (!raster || !out || widthDots == 0 || heightDots == 0) return false;
+    if (yOffset >= heightDots) return false;
+
+    size_t expectedLen = (size_t)widthDots * 3u;
+    if (outLen < expectedLen) return false;
+
+    uint16_t widthBytes = (widthDots + 7u) / 8u;
+    for (size_t i = 0; i < expectedLen; i++) out[i] = 0;
+
+    for (uint16_t x = 0; x < widthDots; x++) {
+        uint8_t* column = out + ((size_t)x * 3u);
+        for (uint16_t bandY = 0; bandY < 24; bandY++) {
+            uint16_t y = yOffset + bandY;
+            if (y >= heightDots) break;
+
+            size_t srcIndex = (size_t)y * widthBytes + (x / 8u);
+            uint8_t srcMask = 0x80u >> (x & 7u);
+            if (raster[srcIndex] & srcMask) {
+                column[bandY / 8u] |= (0x80u >> (bandY & 7u));
+            }
+        }
+    }
+
+    return true;
+}

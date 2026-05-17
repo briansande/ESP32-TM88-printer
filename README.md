@@ -2,7 +2,7 @@
 
 ## Inline segment printing
 
-`POST /printSegments` prints native printer text and small inline monochrome images without rasterizing the full line.
+`POST /printSegments` prints native printer text, small inline monochrome images, and 48x48 emoji images without rasterizing an entire text line.
 
 This endpoint intentionally uses a small `text/plain` protocol instead of JSON so the firmware does not need an added JSON dependency. Each command is one UTF-8 text line:
 
@@ -12,11 +12,23 @@ IMAGE <widthDots> <heightDots> <base64 1-bit raster bytes>
 LF
 ```
 
-`TEXT` writes decoded bytes directly to the printer without adding a newline. `IMAGE` writes an inline bit image at the current print position. `LF` writes exactly one line feed. No extra blank line is inserted between segments. An optional query parameter, `feed=0..10`, adds trailing feed lines after all commands; the default is `0`.
+`TEXT` writes decoded bytes directly to the printer without adding a newline. `IMAGE` writes an inline bit image at the current print position when its height is 24 dots or less. Taller images up to 48 dots are printed as consecutive 24-dot bands for multi-line emoji output. `LF` writes exactly one line feed. No extra blank line is inserted between segments. An optional query parameter, `feed=0..10`, adds trailing feed lines after all commands; the default is `0`.
 
 Inline images use the same input packing as `/printImage`: 1-bit monochrome, row-major, each row packed left-to-right, MSB first, black pixels as `1` bits. The decoded byte count must be `ceil(widthDots / 8) * heightDots`.
 
-Inline image limits are `widthDots <= 576` and `heightDots <= 24`. Clients should use `24x24` as the default emoji size. The firmware converts the row-major input into ESC/POS `ESC *` 24-dot bit-image data, which can share a physical line with native printer text on TM-T88-class printers. The existing `/printImage` endpoint still uses `GS v 0`; that raster command is block-oriented and should not be used when text must continue after an image on the same baseline.
+Image segment limits are `widthDots <= 576` and `heightDots <= 48`. Clients can use `48x48` for standalone emoji output. The firmware converts the row-major input into ESC/POS `ESC *` 24-dot bit-image data; images taller than 24 dots are split into multiple bands with 24-dot line spacing. The existing `/printImage` endpoint still uses `GS v 0`; that raster command is block-oriented and should not be used when text must continue after an image on the same baseline.
+
+Generate a 48x48 test payload from `1F601.png`:
+
+```bash
+python tools/emoji48_payload.py 1F601.png
+```
+
+Send it to a printer bridge:
+
+```bash
+python tools/emoji48_payload.py 1F601.png --host http://printer.local
+```
 
 Example:
 
@@ -61,6 +73,6 @@ PY
 Manual verification requests:
 
 1. Text-only line: `TEXT SGVsbG8=\nLF`
-2. Text + 24x24 image + text: use the Python example above.
+2. 48x48 emoji: `python tools/emoji48_payload.py 1F601.png --host http://printer.local`
 3. Invalid image length: `IMAGE 24 24 AA==\nLF` should return `{"ok":false,"error":"data size mismatch"}`.
 4. Multiple lines: `TEXT TGluZSAx\nLF\nTEXT TGluZSAy\nLF`

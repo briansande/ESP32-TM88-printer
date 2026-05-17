@@ -47,6 +47,8 @@ void setFeedAdjustment(uint8_t amount);
                   const uint8_t* data, size_t dataLen);
   bool printRasterInline(uint16_t widthDots, uint16_t heightDots,
                          const uint8_t* data, size_t dataLen);
+  bool printRasterMultiline(uint16_t widthDots, uint16_t heightDots,
+                            const uint8_t* data, size_t dataLen);
 
 private:
   HardwareSerial _serial;

@@ -1,4 +1,5 @@
 #include "printer_driver.hpp"
+#include "image_pipeline.hpp"
 
 // ---------------------------------------------------------------------------
 // Construction & init
@@ -293,26 +294,71 @@ bool PrinterDriver::printRasterInline(uint16_t widthDots, uint16_t heightDots,
   // ESC * m nL nH data prints a bit image into the current text line buffer.
   // Mode 33 is 24-dot double-density, so a 16x16 emoji can share a line with
   // native text. Unused lower rows are left white.
+  size_t bandLen = (size_t)widthDots * 3u;
+  uint8_t* band = (uint8_t*)malloc(bandLen);
+  if (!band) {
+    Serial.println("PrinterDriver::printRasterInline: out of memory");
+    return false;
+  }
+
+  bool packed = packEscpos24DotBand(data, widthDots, heightDots, 0, band, bandLen);
+  if (packed) {
+    uint8_t header[5] = {
+      0x1B, 0x2A, 0x21,
+      (uint8_t)(widthDots & 0xFF),
+      (uint8_t)((widthDots >> 8) & 0xFF)
+    };
+    writeBytes(header, sizeof(header));
+    writeBytes(band, bandLen);
+  }
+  free(band);
+
+  return packed;
+}
+
+bool PrinterDriver::printRasterMultiline(uint16_t widthDots, uint16_t heightDots,
+                                         const uint8_t* data, size_t dataLen) {
+  if (!data || widthDots == 0 || heightDots == 0 || heightDots > 48) {
+    Serial.println("PrinterDriver::printRasterMultiline: invalid dimensions");
+    return false;
+  }
+
+  uint16_t widthBytes = (widthDots + 7) / 8;
+  size_t expectedLen = (size_t)widthBytes * heightDots;
+  if (dataLen != expectedLen) {
+    Serial.printf("PrinterDriver::printRasterMultiline: dataLen %u != expected %u\n",
+                  (unsigned)dataLen, (unsigned)expectedLen);
+    return false;
+  }
+
+  size_t bandLen = (size_t)widthDots * 3u;
+  uint8_t* band = (uint8_t*)malloc(bandLen);
+  if (!band) {
+    Serial.println("PrinterDriver::printRasterMultiline: out of memory");
+    return false;
+  }
+
   uint8_t header[5] = {
     0x1B, 0x2A, 0x21,
     (uint8_t)(widthDots & 0xFF),
     (uint8_t)((widthDots >> 8) & 0xFF)
   };
-  writeBytes(header, sizeof(header));
 
-  for (uint16_t x = 0; x < widthDots; x++) {
-    uint8_t column[3] = {0, 0, 0};
-    for (uint16_t y = 0; y < heightDots; y++) {
-      size_t srcIndex = (size_t)y * widthBytes + (x / 8);
-      uint8_t srcMask = 0x80 >> (x & 7);
-      if (data[srcIndex] & srcMask) {
-        column[y / 8] |= (0x80 >> (y & 7));
-      }
+  setLineSpacing(24);
+  bool ok = true;
+  for (uint16_t y = 0; y < heightDots; y += 24) {
+    if (!packEscpos24DotBand(data, widthDots, heightDots, y, band, bandLen)) {
+      ok = false;
+      break;
     }
-    writeBytes(column, sizeof(column));
+    writeBytes(header, sizeof(header));
+    writeBytes(band, bandLen);
+    newline();
   }
+  defaultLineSpacing();
+  free(band);
 
-  return true;
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
